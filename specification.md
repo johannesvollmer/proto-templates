@@ -1,8 +1,6 @@
 # PROTO-TEMPLATES
 
----
-Specification
----
+## Specification
 
 The largest unit in this language is an object. 
 Objects are a name, followed by a semicolon, 
