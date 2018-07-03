@@ -1,0 +1,6 @@
+[package]
+name = "prototype_template_language"
+version = "0.1.0"
+authors = ["johannes <johannes596@t-online.de>"]
+
+[dependencies]

@@ -1,0 +1,16 @@
+document: {
+
+    // internal definitions, not per page, but defined implicitly by the engine?
+    div: { html-name: "div" }
+    h: { html-name: "h" }
+    body: { title: "PTL website" content: "Work in Progress" }
+
+    body: Body {
+        content: {
+            :p { inner: "Hello. Welcome to my website" }
+            :br
+
+        }
+    }
+
+}

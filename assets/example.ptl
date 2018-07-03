@@ -1,0 +1,15 @@
+
+peters_name: 'Peter'
+
+Element: {
+    type: 'element'
+    size: 'none'
+}
+
+element: Element {
+    size: '2'
+    extras: {
+        name: peters_name
+    }
+}
+
