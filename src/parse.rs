@@ -1,16 +1,17 @@
 use ::std::collections::HashMap;
 
 pub type ParseResult<'s, T> = ::std::result::Result<T, ParseError<'s>>;
+pub type Source<'s> = &'s str;
 
 #[derive(Eq, PartialEq, Debug, Hash, Clone, Copy)]
 pub enum ParseError<'s> {
-    UnexpectedSymbol { expected: Option<char>, found: &'s str },
+    UnexpectedSymbol { expected: Option<char>, found: Source<'s> },
     UnexpectedEndOfInput { expected: Option<char> },
 }
 
 
 /// returns Some(remaining_source) if the next character is the specified symbol
-fn skip_char(source: &str, symbol: char) -> Option<&str> {
+fn skip_char(source: Source, symbol: char) -> Option<Source> {
     if source.starts_with(symbol) {
         Some(&source[symbol.len_utf8() .. ])
 
@@ -20,13 +21,13 @@ fn skip_char(source: &str, symbol: char) -> Option<&str> {
 }
 
 /// returns Ok(remaining_source) if the first character is the specified symbol
-fn expect_char(source: &str, expected_symbol: char) -> ParseResult<&str> {
+fn expect_char(source: Source, expected_symbol: char) -> ParseResult<Source> {
     skip_char(source, expected_symbol).ok_or(ParseError::UnexpectedSymbol {
         found: source, expected: Some(expected_symbol),
     })
 }
 
-fn parse_chars_while<F: Fn(char) -> bool>(source: &str, predicate: F) -> (&str, &str) {
+fn parse_chars_while<F: Fn(char) -> bool>(source: Source, predicate: F) -> (&str, Source) {
     source.split_at(
         source.char_indices()
             .skip_while(|&(_byte_index, character)| predicate(character))
@@ -36,7 +37,7 @@ fn parse_chars_while<F: Fn(char) -> bool>(source: &str, predicate: F) -> (&str, 
 }
 
 /// returns (parsed, remaining), both strings may be empty, discards the delimiter, result strings may start with whitespace
-fn parse_over_delimiter_char(source: &str, delimiter: char) -> ParseResult<(&str, &str)> {
+fn parse_over_delimiter_char(source: Source, delimiter: char) -> ParseResult<(&str, Source)> {
     let (parsed, source) = parse_chars_while(source, |character| character != delimiter);
     expect_char(source, delimiter)
         .map_err(|e| ParseError::UnexpectedEndOfInput { expected: Some(delimiter) })
@@ -47,27 +48,27 @@ fn parse_over_delimiter_char(source: &str, delimiter: char) -> ParseResult<(&str
 
 /// skips whitespace, returns Some(remaining_source) if the first character is the specified symbol
 // TODO perf: on None return, discards trimming, and must be trimmed again..!
-fn skip(source: &str, symbol: char) -> Option<&str> {
+fn skip(source: Source, symbol: char) -> Option<Source> {
     skip_char(source.trim_left(), symbol)
 }
 
 /// skips whitespace, returns Ok(remaining_source) if the first character is the specified symbol
-fn expect(source: &str, expected_symbol: char) -> ParseResult<&str> {
+fn expect(source: Source, expected_symbol: char) -> ParseResult<Source> {
     expect_char(source.trim_left(), expected_symbol)
 }
 
 /// skips white, returns (parsed, remaining), both strings may be empty, discards the delimiter, result strings may start with whitespace
-fn parse_over_delimiter(source: &str, delimiter: char) -> ParseResult<(&str, &str)> {
+fn parse_over_delimiter(source: Source, delimiter: char) -> ParseResult<(&str, Source)> {
     parse_over_delimiter_char(source.trim_left(), delimiter)
 }
 
 /// skips leading whitespace, returns (parsed, remaining), both strings may be empty
-fn parse_while<F: Fn(char) -> bool>(source: &str, predicate: F) -> (&str, &str) {
+fn parse_while<F: Fn(char) -> bool>(source: Source, predicate: F) -> (&str, Source) {
     parse_chars_while(source.trim_left(), predicate)
 }
 
 /// skips leading whitespace, returns Ok(none) if there is no string literal, and an error if there was a string literal detected but it was malformed
-fn parse_string_literal(source: &str) -> ParseResult<(Option<&str>, &str)> {
+fn parse_string_literal(source: Source) -> ParseResult<(Option<&str>, Source)> {
     if let Some(source) = skip(source, '\'') {
         parse_over_delimiter_char(source, '\'')
             .map(|(literal, source)| (Some(literal), source))
@@ -78,13 +79,19 @@ fn parse_string_literal(source: &str) -> ParseResult<(Option<&str>, &str)> {
 }
 
 /// skips leading whitespace, may return an empty identifier
-fn parse_identifier(source: &str) -> (&str, &str) {
-    parse_while(source.trim_left(), |char| char.is_alphanumeric() || char == '_')
+fn parse_identifier(source: Source) -> (Identifier, Source) {
+    let (name, source) = parse_while(
+        source.trim_left(),
+        |char| char.is_alphanumeric() || char == '_'
+    );
+
+    (Identifier { name }, source)
 }
 
 /// skips leading whitespace, parses until a '}' is found, throws error on file end without '}'
-fn parse_delimited_named_objects(mut source: &str) -> ParseResult<(Vec<Named<Object>>, &str)> {
-    let mut overrides = Vec::new();
+fn parse_delimited_named_objects(mut source: Source) -> ParseResult<(NamedObjects, Source)> {
+    let mut names = HashMap::new();
+    let mut objects = Vec::new();
 
     if let Some(mut remaining_source) = skip(source, '{') {
         loop {
@@ -103,8 +110,10 @@ fn parse_delimited_named_objects(mut source: &str) -> ParseResult<(Vec<Named<Obj
                     break;
 
                 } else { // more overridden properties to parse
-                    let (object, new_source) = parse_named_object(remaining_objects)?;
-                    overrides.push(object);
+                    let (name, object, new_source) = parse_named_object(remaining_objects)?;
+                    names.insert(name, objects.len());
+                    objects.push(object);
+
                     remaining_source = new_source;
                 }
             }
@@ -113,12 +122,13 @@ fn parse_delimited_named_objects(mut source: &str) -> ParseResult<(Vec<Named<Obj
         source = remaining_source;
     }
 
-    Ok((overrides, source))
+    Ok((NamedObjects { names, objects }, source))
 }
 
 /// skips leading whitespace, parses until file end, throws error on unexpected '}'
-fn parse_remaining_named_objects(mut source: &str) -> ParseResult<(Vec<Named<Object>>, &str)> {
-    let mut overrides = Vec::new();
+fn parse_remaining_named_objects(mut source: Source) -> ParseResult<(NamedObjects, Source)> {
+    let mut names = HashMap::new();
+    let mut objects = Vec::new();
 
     loop {
         let remaining_objects = source.trim_left();
@@ -129,18 +139,19 @@ fn parse_remaining_named_objects(mut source: &str) -> ParseResult<(Vec<Named<Obj
             break;
 
         } else { // text remaining, probably an object
-            let (object, new_source) = parse_named_object(remaining_objects)?;
-            overrides.push(object);
+            let (name, object, new_source) = parse_named_object(remaining_objects)?;
+            names.insert(name, objects.len());
+            objects.push(object);
             source = new_source;
         }
     }
 
-    Ok((overrides, source))
+    Ok((NamedObjects { names, objects }, source))
 }
 
 
 /// skips leading whitespace, parses either a string literal or a compound overriden object
-fn parse_object(source: &str) -> ParseResult<(Object, &str)> {
+fn parse_object(source: Source) -> ParseResult<(Object, Source)> {
     if let (Some(string_literal), source) = parse_string_literal(source)? {
         Ok((
             Object::StringLiteral(string_literal),
@@ -148,12 +159,12 @@ fn parse_object(source: &str) -> ParseResult<(Object, &str)> {
         ))
 
     } else {
-        let (prototype_identifier, source) = parse_identifier(source);
+        let (prototype, source) = parse_identifier(source);
         let (overrides, source) = parse_delimited_named_objects(source)?;
 
         Ok((
             Object::Compound(Compound {
-                prototype_identifier,
+                prototype,
                 overrides,
             }),
             source
@@ -163,27 +174,26 @@ fn parse_object(source: &str) -> ParseResult<(Object, &str)> {
 
 
 /// skips leading whitespace
-fn parse_named_object(source: &str) -> ParseResult<(Named<Object>, &str)> {
+fn parse_named_object(source: Source) -> ParseResult<(Identifier, Object, Source)> {
     let (name, source) = parse_identifier(source);
     let source = expect(source, ':')?;
 
     let (object, source) = parse_object(source)?;
 
-    Ok((
-        Named { name, value: object, },
-        source
-    ))
+    Ok((name, object, source))
 }
 
 
 /// parses objects from a string
-pub fn parse(source: &str) -> ParseResult<Vec<Named<Object>>> {
+pub fn parse(source: Source) -> ParseResult<NamedObjects> {
     parse_remaining_named_objects(source)
         .map(|(objects, _rest_src)| objects)
 }
 
 
-#[derive(Eq, PartialEq, Debug, Hash, Clone)]
+
+
+#[derive(Eq, PartialEq, Debug, Clone)]
 pub enum Object<'s> {
     /// literal may be empty
     StringLiteral(&'s str),
@@ -191,24 +201,71 @@ pub enum Object<'s> {
 }
 
 /// only the result of parsing. does not do any smart stuff. only holds string results.
-#[derive(Eq, PartialEq, Debug, Hash, Clone)]
+#[derive(Eq, PartialEq, Debug, Clone)]
 pub struct Compound<'s> {
     /// may be an empty string
-    pub prototype_identifier: &'s str,
-    pub overrides: Vec<Named<'s, Object<'s>>>,
+    pub prototype: Identifier<'s>, // TODO later change to IdentifierChain
+    pub overrides: NamedObjects<'s>,
+}
+
+/// parse result. supports looking up variables, e.g. prototypes by name
+#[derive(Eq, PartialEq, Debug, Clone)]
+pub struct NamedObjects<'s> {
+    pub objects: Vec<Object<'s>>, // separated from hashmap to perserve declaration order
+    pub names: HashMap<Identifier<'s>, usize>, // indices into self.objects
 }
 
 #[derive(Eq, PartialEq, Debug, Hash, Clone)]
-pub struct Named<'s, T> {
-    /// may be an empty string
-    pub name: &'s str,
-    pub value: T,
+pub struct Identifier<'s> {
+    pub name: &'s str, // currently only global variables supported
+}
+
+
+impl<'s> NamedObjects<'s> {
+    pub fn get_by_name(&self, identifier: &Identifier) -> Option<&Object> {
+        self.names.get(identifier).map(|index| &self.objects[*index])
+    }
 }
 
 
 #[cfg(test)]
+mod test_lookup {
+    use super::*;
+
+}
+
+#[cfg(test)]
 mod test_parsing {
     use super::*;
+
+    fn compound_with_prototype_and_overrides<'s>(
+        prototype: &'s str,
+        overrides: Vec<(&'s str, Object<'s>)>
+    ) -> Object<'s> {
+        Object::Compound(Compound {
+            prototype: Identifier { name: prototype },
+            overrides: NamedObjects {
+                names: overrides.iter().enumerate()
+                    .map(|(index, &(ref name, _))| {
+                        (Identifier { name }, index)
+                    })
+                    .collect(),
+
+                objects: overrides.into_iter()
+                    .map(|(_, object)| object)
+                    .collect(),
+            },
+        })
+    }
+
+    fn compound_with_prototype(prototype: &str) -> Object {
+        compound_with_prototype_and_overrides(prototype, vec![])
+    }
+
+    fn empty_compound() -> Object<'static> {
+        compound_with_prototype("")
+    }
+
 
     #[test]
     fn test_skip_symbol(){
@@ -301,71 +358,30 @@ mod test_parsing {
 
     #[test]
     fn test_parse_identifier(){
-        assert_eq!(parse_identifier("?"), ("", "?"));
-        assert_eq!(parse_identifier("-"), ("", "-"));
-        assert_eq!(parse_identifier("$"), ("", "$"));
+        assert_eq!(parse_identifier("?"), (Identifier{name:""}, "?"));
+        assert_eq!(parse_identifier("-"), (Identifier{name:""}, "-"));
+        assert_eq!(parse_identifier("$"), (Identifier{name:""}, "$"));
 
-        assert_eq!(parse_identifier("x"), ("x", ""));
-        assert_eq!(parse_identifier("xy"), ("xy", ""));
-        assert_eq!(parse_identifier("xy "), ("xy", " "));
-        assert_eq!(parse_identifier(" xy "), ("xy", " "));
-        assert_eq!(parse_identifier(" xy9 "), ("xy9", " "));
+        assert_eq!(parse_identifier("x"), (Identifier{name:"x"}, ""));
+        assert_eq!(parse_identifier("xy"), (Identifier{name:"xy"}, ""));
+        assert_eq!(parse_identifier("xy "), (Identifier{name:"xy"}, " "));
+        assert_eq!(parse_identifier(" xy "), (Identifier{name:"xy"}, " "));
+        assert_eq!(parse_identifier(" xy9 "), (Identifier{name:"xy9"}, " "));
 
-        assert_eq!(parse_identifier(" 9 "), ("9", " "));
-        assert_eq!(parse_identifier("x§"), ("x", "§"));
+        assert_eq!(parse_identifier(" 9 "), (Identifier{name:"9"}, " "));
+        assert_eq!(parse_identifier("x§"), (Identifier{name:"x"}, "§"));
     }
+
 
     #[test]
     fn test_parse_flat_value(){
-        assert_eq!(
-            parse_object("'xyz'"),
-            Ok((Object::StringLiteral("xyz"), ""))
-        );
-
-        assert_eq!(
-            parse_object(" 'xyz' "),
-            Ok((Object::StringLiteral("xyz"), " "))
-        );
-
-        assert_eq!(
-            parse_object("div"),
-            Ok((Object::Compound(Compound {
-                prototype_identifier: "div",
-                overrides: vec![],
-            }), ""))
-        );
-
-        assert_eq!(
-            parse_object(" div!"),
-            Ok((Object::Compound(Compound {
-                prototype_identifier: "div",
-                overrides: vec![],
-            }), "!"))
-        );
-
-        assert_eq!(
-            parse_object("div{}"),
-            Ok((Object::Compound(Compound {
-                prototype_identifier: "div",
-                overrides: vec![],
-            }), ""))
-        );
-
-        assert_eq!(
-            parse_object(" div { } "),
-            Ok((Object::Compound(Compound {
-                prototype_identifier: "div",
-                overrides: vec![],
-            }), " "))
-        );
-
-        assert_eq!(
-            parse_object(""),
-            Ok((Object::Compound(Compound {
-                prototype_identifier: "",
-                overrides: vec![],
-            }), ""))
-        );
+        assert_eq!(parse_object("'xyz'"), Ok((Object::StringLiteral("xyz"), "")));
+        assert_eq!(parse_object(" 'xyz' "), Ok((Object::StringLiteral("xyz"), " ")));
+        assert_eq!(parse_object("div"), Ok((compound_with_prototype("div"), "")));
+        assert_eq!(parse_object(" div!"), Ok((compound_with_prototype("div"), "!")));
+        assert_eq!(parse_object("div{}"), Ok((compound_with_prototype("div"), "")));
+        assert_eq!(parse_object(" div { } "), Ok((compound_with_prototype("div"), " ")));
+        assert_eq!(parse_object(""), Ok((empty_compound(), "")));
 
 
         /* TODO
@@ -382,15 +398,16 @@ mod test_parsing {
     fn test_parse_flat_named_object(){
         assert_eq!(
             parse_named_object(" text: 'xyz' "),
-            Ok((Named { name: "text", value: Object::StringLiteral("xyz")}, " "))
+            Ok((Identifier { name: "text" }, Object::StringLiteral("xyz"), " "))
         );
 
         assert_eq!(
             parse_named_object(" text: div { } "),
-            Ok((Named { name: "text", value: Object::Compound(Compound {
-                prototype_identifier: "div",
-                overrides: vec![],
-            }) }, " "))
+            Ok((
+                Identifier { name: "text" },
+                compound_with_prototype("div"),
+                " "
+            ))
         );
     }
 
@@ -398,26 +415,25 @@ mod test_parsing {
     fn test_parse_nested_object(){
         assert_eq!(
             parse_named_object(" my_div: div { text: 'xy z' } "),
-            Ok((Named { name: "my_div", value: Object::Compound(Compound {
-                prototype_identifier: "div",
-                overrides: vec![
-                    Named { name: "text", value: Object::StringLiteral("xy z") }
-                ],
-            }) }, " "))
+            Ok((
+                Identifier { name: "my_div", },
+                compound_with_prototype_and_overrides("div", vec![
+                    ("text", Object::StringLiteral("xy z")),
+                ]),
+                " "
+            ))
         );
 
         assert_eq!(
             parse_named_object(" my_div: div { text: 'xy z' content: default {} } "),
-            Ok((Named { name: "my_div", value: Object::Compound(Compound {
-                prototype_identifier: "div",
-                overrides: vec![
-                    Named { name: "text", value: Object::StringLiteral("xy z") },
-                    Named { name: "content", value: Object::Compound(Compound {
-                        prototype_identifier: "default",
-                        overrides: vec![],
-                    }) },
-                ],
-            }) }, " "))
+            Ok((
+                Identifier { name: "my_div" },
+                compound_with_prototype_and_overrides("div", vec![
+                    ("text", Object::StringLiteral("xy z")),
+                    ("content", compound_with_prototype("default")),
+                ]),
+                " "
+            ))
         );
 
         assert_eq!(
