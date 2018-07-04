@@ -9,7 +9,7 @@ pub enum ParseError<'s> {
 }
 
 
-/// returns Some(remaining_source) if the first character is the specified symbol
+/// returns Some(remaining_source) if the next character is the specified symbol
 fn skip_char(source: &str, symbol: char) -> Option<&str> {
     if source.starts_with(symbol) {
         Some(&source[symbol.len_utf8() .. ])
@@ -26,18 +26,21 @@ fn expect_char(source: &str, expected_symbol: char) -> ParseResult<&str> {
     })
 }
 
+fn parse_chars_while<F: Fn(char) -> bool>(source: &str, predicate: F) -> (&str, &str) {
+    source.split_at(
+        source.char_indices()
+            .skip_while(|&(_byte_index, character)| predicate(character))
+            .map(|(byte_index, character)| byte_index)
+            .next().unwrap_or(source.len()) // if the end was reached, split after the last char
+    )
+}
+
 /// returns (parsed, remaining), both strings may be empty, discards the delimiter, result strings may start with whitespace
 fn parse_over_delimiter_char(source: &str, delimiter: char) -> ParseResult<(&str, &str)> {
-    // TODO call parse_while & next()?
-    source.char_indices()
-        .find(|&(_, character)| character == delimiter)
-        .ok_or(ParseError::UnexpectedEndOfInput{ expected: Some(delimiter) })
-        .map(|(byte_index, _)| {
-            (
-                &source[..byte_index],
-                &source[byte_index + delimiter.len_utf8()..],
-            )
-        })
+    let (parsed, source) = parse_chars_while(source, |character| character != delimiter);
+    expect_char(source, delimiter)
+        .map_err(|e| ParseError::UnexpectedEndOfInput { expected: Some(delimiter) })
+        .map(|source_without_delimiter| (parsed, source_without_delimiter))
 }
 
 
@@ -53,22 +56,14 @@ fn expect(source: &str, expected_symbol: char) -> ParseResult<&str> {
     expect_char(source.trim_left(), expected_symbol)
 }
 
-
-/// returns (parsed, remaining), both strings may be empty, discards the delimiter, result strings may start with whitespace
+/// skips white, returns (parsed, remaining), both strings may be empty, discards the delimiter, result strings may start with whitespace
 fn parse_over_delimiter(source: &str, delimiter: char) -> ParseResult<(&str, &str)> {
     parse_over_delimiter_char(source.trim_left(), delimiter)
 }
 
 /// skips leading whitespace, returns (parsed, remaining), both strings may be empty
 fn parse_while<F: Fn(char) -> bool>(source: &str, predicate: F) -> (&str, &str) {
-    let source = source.trim_left();
-
-    let byte_index = source.char_indices()
-        .skip_while(|&(_byte_index, character)| predicate(character))
-        .map(|(byte_index, character)| byte_index)
-        .next().unwrap_or(source.len()); // if the end was reached, split after the last char
-
-    source.split_at(byte_index)
+    parse_chars_while(source.trim_left(), predicate)
 }
 
 /// skips leading whitespace, returns Ok(none) if there is no string literal, and an error if there was a string literal detected but it was malformed
@@ -95,7 +90,7 @@ fn parse_delimited_named_objects(mut source: &str) -> ParseResult<(Vec<Named<Obj
         loop {
             let remaining_objects = remaining_source.trim_left();
 
-            if remaining_objects.is_empty() { // source is over without finding delimiter
+            if remaining_objects.is_empty() { // source is over, without finding delimiter
                 return Err(ParseError::UnexpectedEndOfInput {
                     expected: Some('}')
                 });
@@ -147,12 +142,10 @@ fn parse_remaining_named_objects(mut source: &str) -> ParseResult<(Vec<Named<Obj
 /// skips leading whitespace, parses either a string literal or a compound overriden object
 fn parse_object(source: &str) -> ParseResult<(Object, &str)> {
     if let (Some(string_literal), source) = parse_string_literal(source)? {
-        //literal_result.map(|(string_literal, source)|{
-            Ok((
-                Object::StringLiteral(string_literal),
-                source
-            ))
-        //})
+        Ok((
+            Object::StringLiteral(string_literal),
+            source
+        ))
 
     } else {
         let (prototype_identifier, source) = parse_identifier(source);
