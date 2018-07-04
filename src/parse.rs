@@ -222,22 +222,18 @@ pub struct Identifier<'s> {
 
 
 impl<'s> NamedObjects<'s> {
-    pub fn get_by_name(&self, identifier: &Identifier) -> Option<&Object> {
+    pub fn find_by_identifier(&self, identifier: &Identifier) -> Option<&Object> {
         self.names.get(identifier).map(|index| &self.objects[*index])
     }
 }
 
 
 #[cfg(test)]
-mod test_lookup {
-    use super::*;
-
-}
-
-#[cfg(test)]
 mod test_parsing {
     use super::*;
 
+    // Object is not designed to be instantiated, but only to be parsed,
+    // thus this is not a constructor but a test-helper
     fn compound_with_prototype_and_overrides<'s>(
         prototype: &'s str,
         overrides: Vec<(&'s str, Object<'s>)>
