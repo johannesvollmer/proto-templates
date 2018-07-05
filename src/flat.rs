@@ -32,7 +32,7 @@ impl FlatObject {
         world: &NamedObjects,
         properties: &mut FlatCompound
     ){
-        for (override_identifier, override_index) in &objects.names {
+        for (override_identifier, override_index) in &objects.identifiers {
             let name_string = override_identifier.name.to_owned();
             properties.entry(name_string).or_insert_with(||{
                 FlatObject::build_from_parsed_unnamed_object(
@@ -50,9 +50,9 @@ impl FlatObject {
     ) {
         Self::fill_named_objects(&compound.overrides, world, properties);
 
-        if !compound.prototype.name.is_empty() {
+        if compound.prototype.has_target() {
             // insert all inherited properties, if not already overridden
-            if let Object::Compound(ref compound) = *world.find_by_identifier(&compound.prototype)
+            if let Object::Compound(ref compound) = *world.resolve_reference(&compound.prototype)
                 .expect(&format!("variable not found: '{:?}'", compound.prototype)) // TODO use runtime error handling
                 {
                     Self::deep_fill_parsed_compound(compound, world, properties);
@@ -67,9 +67,10 @@ impl FlatObject {
             },
 
             Object::Compound(ref compound) => {
-                // 'inline' the special case of 'variables' being a prototype without overrides
-                if compound.overrides.objects.is_empty() && !compound.prototype.name.is_empty() {
-                    let prototype = world.find_by_identifier(&compound.prototype)
+                // inlining of variables,
+                // needed for the special case where the prototype is a string literal
+                if compound.overrides.objects.is_empty() && compound.prototype.has_target() {
+                    let prototype = world.resolve_reference(&compound.prototype)
                         // TODO use runtime error handling
                         .expect(&format!("variable not found: '{:?}'", compound.prototype));
 
@@ -91,15 +92,26 @@ impl FlatObject {
 mod test {
     use super::*;
 
+    fn literal(text: &str) -> FlatObject {
+        FlatObject::StringLiteral(String::from(text))
+    }
+
+    fn compound(properties: Vec<(&str, FlatObject)>) -> FlatObject {
+        FlatObject::Compound({
+            properties.into_iter()
+                .map(|(name, obj)| (String::from(name), obj))
+                .collect()
+        })
+    }
+
+
     #[test]
     fn test_build_flat_object(){
         assert_eq!(
             FlatObject::parse(" color: ' #abc ' ").expect("Parsing Error"),
-            FlatObject::Compound(
-                vec![
-                    (String::from("color"), FlatObject::StringLiteral(String::from(" #abc ")))
-                ].into_iter().collect()
-            )
+            compound(vec![
+                ("color", literal(" #abc "))
+            ])
         );
 
         assert_eq!(
@@ -110,25 +122,19 @@ mod test {
 
             "#).expect("Parsing Error"),
 
-            FlatObject::Compound(
-                vec![
-                    (String::from("default_color"), FlatObject::Compound(
-                        vec![
-                            (String::from("r"), FlatObject::StringLiteral(String::from("0"))),
-                            (String::from("g"), FlatObject::StringLiteral(String::from("0"))),
-                            (String::from("b"), FlatObject::StringLiteral(String::from("0"))),
-                        ].into_iter().collect()
-                    )),
+            compound(vec![
+                ("default_color", compound(vec![
+                    ("r", literal("0")),
+                    ("g", literal("0")),
+                    ("b", literal("0")),
+                ])),
 
-                    (String::from("red"), FlatObject::Compound(
-                        vec![
-                            (String::from("r"), FlatObject::StringLiteral(String::from("1"))),
-                            (String::from("g"), FlatObject::StringLiteral(String::from("0"))),
-                            (String::from("b"), FlatObject::StringLiteral(String::from("0"))),
-                        ].into_iter().collect()
-                    ))
-                ].into_iter().collect()
-            )
+                ("red", compound(vec![
+                    ("r", literal("1")),
+                    ("g", literal("0")),
+                    ("b", literal("0")),
+                ]))
+            ])
         );
 
         assert_eq!(
@@ -144,27 +150,47 @@ mod test {
 
             "#).expect("Parsing Error"),
 
-            FlatObject::Compound(
-                vec![
-                    (String::from("ok_text"), FlatObject::StringLiteral(String::from("Ok"))),
+            compound(vec![
+                ("ok_text", literal("Ok")),
 
-                    (String::from("Button"), FlatObject::Compound(
-                        vec![
-                            (String::from("visible"), FlatObject::StringLiteral(String::from("true"))),
-                            (String::from("text"), FlatObject::StringLiteral(String::from("Click Here"))),
-                        ].into_iter().collect()
-                    )),
+                ("Button", compound(vec![
+                    ("visible", literal("true")),
+                    ("text", literal("Click Here")),
+                ])),
 
-                    (String::from("ok_button"), FlatObject::Compound(
-                        vec![
-                            (String::from("visible"), FlatObject::StringLiteral(String::from("true"))),
-                            (String::from("text"), FlatObject::StringLiteral(String::from("Ok"))),
-                        ].into_iter().collect()
-                    ))
+                ("ok_button", compound(vec![
+                    ("visible", literal("true")),
+                    ("text", literal("Ok")),
+                ]))
+            ])
+        );
 
 
-                ].into_iter().collect()
-            )
+        assert_eq!(
+            FlatObject::parse(r#"
+                text: {
+                    cancel: {
+                        german: 'Abbrechen'
+                    }
+                }
+
+                cancel_button: {
+                    text: text.cancel.german
+                }
+
+            "#).expect("Parsing Error"),
+
+            compound(vec![
+                (("text"), compound(vec![
+                    (("cancel"), compound(vec![
+                        (("german"), literal("Abbrechen")),
+                    ])),
+                ])),
+
+                (("cancel_button"), compound(vec![
+                    (("text"), literal("Abbrechen")),
+                ])),
+            ])
         );
     }
 }

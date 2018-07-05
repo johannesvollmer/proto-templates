@@ -1,7 +1,46 @@
 use ::std::collections::HashMap;
 
-pub type ParseResult<'s, T> = ::std::result::Result<T, ParseError<'s>>;
+
+#[derive(Eq, PartialEq, Debug, Clone)]
+pub enum Object<'s> {
+    /// literal may be empty
+    StringLiteral(&'s str),
+    Compound(Compound<'s>)
+}
+
+/// only the result of parsing. does not do any smart stuff. only holds string results.
+#[derive(Eq, PartialEq, Debug, Clone)]
+pub struct Compound<'s> {
+    pub prototype: Reference<'s>, /// may be an empty string
+    pub overrides: NamedObjects<'s>,
+}
+
+/// parse result. supports looking up variables, e.g. prototypes by name
+#[derive(Eq, PartialEq, Debug, Clone)]
+pub struct NamedObjects<'s> {
+    pub objects: Vec<Object<'s>>, // separated from hashmap, to perserve declaration order
+
+    /// indices into self.objects
+    pub identifiers: HashMap<Identifier<'s>, usize>,
+}
+
+/// the local, simple name of an object
+#[derive(Eq, PartialEq, Debug, Hash, Clone)]
+pub struct Identifier<'s> {
+    pub name: &'s str,
+}
+
+/// the absolute, qualified name for a prototype
+#[derive(Eq, PartialEq, Debug, Hash, Clone)]
+pub struct Reference<'s> {
+    /// before parsing, these entries would be separated by dots
+    pub identifiers: Vec<Identifier<'s>>,
+}
+
+
 pub type Source<'s> = &'s str;
+
+pub type ParseResult<'s, T> = ::std::result::Result<T, ParseError<'s>>;
 
 #[derive(Eq, PartialEq, Debug, Hash, Clone, Copy)]
 pub enum ParseError<'s> {
@@ -9,6 +48,52 @@ pub enum ParseError<'s> {
     UnexpectedEndOfInput { expected: Option<char> },
 }
 
+pub type ResolveResult<'s, T> = ::std::result::Result<T, ResolveError<'s>>;
+
+#[derive(Eq, PartialEq, Debug, Hash, Clone)]
+pub enum ResolveError<'s> {
+    ReferenceNotFound(Identifier<'s>),
+    StringLiteralHasNoProperties,
+}
+
+
+impl<'s> Reference<'s> {
+    /// false if this reference is an empty string
+    pub fn has_target(&self) -> bool {
+        !self.identifiers.is_empty()
+            && self.identifiers.iter().any(|id| !id.name.is_empty())
+    }
+}
+
+impl<'s> NamedObjects<'s> {
+    pub fn resolve_reference<'o>(&'o self, reference: &'o Reference<'o>) -> ResolveResult<&'o Object<'o>> {
+        self.resolve_reference_names(&reference.identifiers)
+    }
+
+    fn resolve_reference_names<'o>(&'o self, identifiers: &'o [Identifier<'o>]) -> ResolveResult<&'o Object<'o>> {
+        let (first, sub_identifiers) = identifiers.split_first()
+            .expect("resolve_reference_names: identifiers must not be empty");
+
+        let index = self.identifiers.get(first)
+            .ok_or_else(|| ResolveError::ReferenceNotFound(first.clone()))?;
+
+        let identified = self.objects.get(*index)
+            .expect("Invalid NamedObject::names Index");
+
+        if sub_identifiers.is_empty() {
+            Ok(identified)
+
+        } else {
+            match *identified {
+                Object::Compound(ref compound) => {
+                    compound.overrides.resolve_reference_names(sub_identifiers)
+                },
+
+                Object::StringLiteral(_) => Err(ResolveError::StringLiteralHasNoProperties),
+            }
+        }
+    }
+}
 
 /// returns Some(remaining_source) if the next character is the specified symbol
 fn skip_char(source: Source, symbol: char) -> Option<Source> {
@@ -82,10 +167,42 @@ fn parse_string_literal(source: Source) -> ParseResult<(Option<&str>, Source)> {
 fn parse_identifier(source: Source) -> (Identifier, Source) {
     let (name, source) = parse_while(
         source.trim_left(),
-        |char| char.is_alphanumeric() || char == '_'
+        |symbol| !symbol.is_whitespace() && !(".:{}").contains(symbol)
     );
 
     (Identifier { name }, source)
+}
+
+// TODO test these, and test lookup
+/// parse a series of identifiers, separated by dots, e.g. 'label.dimensions.x'
+fn parse_reference(source: Source) -> (Reference, Source) {
+    let mut identifiers = Vec::new();
+
+    let (first_identifier, mut source) = parse_identifier(source);
+    if !first_identifier.name.is_empty() {
+        identifiers.push(first_identifier);
+        let mut remaining = source;
+
+        while let Some(new_source) = skip(remaining, '.') {
+            let (identifier, new_source) = parse_identifier(new_source);
+            if !identifier.name.is_empty() {
+                identifiers.push(identifier);
+            } /* else {
+                TODO
+                return Err(ParseError::UnexpectedSymbol {
+                    expected: None, // TODO expected("")
+                    found: source,
+                })
+            }*/
+
+            remaining = new_source;
+        }
+
+        source = remaining;
+    }
+
+    (Reference { identifiers }, source)
+
 }
 
 /// skips leading whitespace, parses until a '}' is found, throws error on file end without '}'
@@ -122,7 +239,7 @@ fn parse_delimited_named_objects(mut source: Source) -> ParseResult<(NamedObject
         source = remaining_source;
     }
 
-    Ok((NamedObjects { names, objects }, source))
+    Ok((NamedObjects { identifiers: names, objects }, source))
 }
 
 /// skips leading whitespace, parses until file end, throws error on unexpected '}'
@@ -146,7 +263,7 @@ fn parse_remaining_named_objects(mut source: Source) -> ParseResult<(NamedObject
         }
     }
 
-    Ok((NamedObjects { names, objects }, source))
+    Ok((NamedObjects { identifiers: names, objects }, source))
 }
 
 
@@ -159,7 +276,7 @@ fn parse_object(source: Source) -> ParseResult<(Object, Source)> {
         ))
 
     } else {
-        let (prototype, source) = parse_identifier(source);
+        let (prototype, source) = parse_reference(source);
         let (overrides, source) = parse_delimited_named_objects(source)?;
 
         Ok((
@@ -193,41 +310,6 @@ pub fn parse(source: Source) -> ParseResult<NamedObjects> {
 
 
 
-#[derive(Eq, PartialEq, Debug, Clone)]
-pub enum Object<'s> {
-    /// literal may be empty
-    StringLiteral(&'s str),
-    Compound(Compound<'s>)
-}
-
-/// only the result of parsing. does not do any smart stuff. only holds string results.
-#[derive(Eq, PartialEq, Debug, Clone)]
-pub struct Compound<'s> {
-    /// may be an empty string
-    pub prototype: Identifier<'s>, // TODO later change to IdentifierChain
-    pub overrides: NamedObjects<'s>,
-}
-
-/// parse result. supports looking up variables, e.g. prototypes by name
-#[derive(Eq, PartialEq, Debug, Clone)]
-pub struct NamedObjects<'s> {
-    pub objects: Vec<Object<'s>>, // separated from hashmap to perserve declaration order
-    pub names: HashMap<Identifier<'s>, usize>, // indices into self.objects
-}
-
-#[derive(Eq, PartialEq, Debug, Hash, Clone)]
-pub struct Identifier<'s> {
-    pub name: &'s str, // currently only global variables supported
-}
-
-
-impl<'s> NamedObjects<'s> {
-    pub fn find_by_identifier(&self, identifier: &Identifier) -> Option<&Object> {
-        self.names.get(identifier).map(|index| &self.objects[*index])
-    }
-}
-
-
 #[cfg(test)]
 mod test_parsing {
     use super::*;
@@ -239,9 +321,9 @@ mod test_parsing {
         overrides: Vec<(&'s str, Object<'s>)>
     ) -> Object<'s> {
         Object::Compound(Compound {
-            prototype: Identifier { name: prototype },
+            prototype: Reference { identifiers: vec![ Identifier { name: prototype } ] },
             overrides: NamedObjects {
-                names: overrides.iter().enumerate()
+                identifiers: overrides.iter().enumerate()
                     .map(|(index, &(ref name, _))| {
                         (Identifier { name }, index)
                     })
@@ -353,19 +435,43 @@ mod test_parsing {
     }
 
     #[test]
-    fn test_parse_identifier(){
-        assert_eq!(parse_identifier("?"), (Identifier{name:""}, "?"));
-        assert_eq!(parse_identifier("-"), (Identifier{name:""}, "-"));
-        assert_eq!(parse_identifier("$"), (Identifier{name:""}, "$"));
+    fn test_parse_identifier() {
+        assert_eq!(parse_identifier("x$%&?/(|="), (Identifier { name: "x$%&?/(|=" }, ""));
+        assert_eq!(parse_identifier("xy "), (Identifier { name: "xy" }, " "));
+        assert_eq!(parse_identifier(" xy "), (Identifier { name: "xy" }, " "));
+        assert_eq!(parse_identifier(" xy9 "), (Identifier { name: "xy9" }, " "));
 
-        assert_eq!(parse_identifier("x"), (Identifier{name:"x"}, ""));
-        assert_eq!(parse_identifier("xy"), (Identifier{name:"xy"}, ""));
-        assert_eq!(parse_identifier("xy "), (Identifier{name:"xy"}, " "));
-        assert_eq!(parse_identifier(" xy "), (Identifier{name:"xy"}, " "));
-        assert_eq!(parse_identifier(" xy9 "), (Identifier{name:"xy9"}, " "));
+        assert_eq!(parse_identifier(" 9 "), (Identifier { name: "9" }, " "));
+        assert_eq!(parse_identifier("x§"), (Identifier { name: "x" }, "§"));
+    }
 
-        assert_eq!(parse_identifier(" 9 "), (Identifier{name:"9"}, " "));
-        assert_eq!(parse_identifier("x§"), (Identifier{name:"x"}, "§"));
+    #[test]
+    fn test_parse_reference() {
+        assert_eq!(parse_reference("x"), (Reference { identifiers: vec![Identifier { name: "x" }]}, ""));
+        assert_eq!(parse_reference("x.y"), (Reference {
+            identifiers: vec![
+                Identifier { name: "x" },
+                Identifier { name: "y" }
+            ] }, "")
+        );
+
+        assert_eq!(parse_reference("x.y.$"), (Reference {
+            identifiers: vec![
+                Identifier { name: "x" },
+                Identifier { name: "y" },
+                Identifier { name: "$" },
+            ] }, "")
+        );
+
+        assert_eq!(parse_reference(" x . y . $ "), (Reference {
+            identifiers: vec![
+                Identifier { name: "x" },
+                Identifier { name: "y" },
+                Identifier { name: "$" },
+            ] }, " ")
+        );
+
+        assert_eq!(parse_reference(" "), (Reference { identifiers: vec![] }, ""));
     }
 
 
