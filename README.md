@@ -7,4 +7,5 @@ The language will support reusing patterns by having parameters.
 
 See the [specification](https://github.com/johannesvollmer/proto-templates/blob/master/SPECIFICATION.md).
 
-This repository implements the Proto-Templates Specification in Rust.
+This repository holds the Specification of Proto-Templates, 
+and also implements it using Rust.

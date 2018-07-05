@@ -317,11 +317,14 @@ mod test_parsing {
     // Object is not designed to be instantiated, but only to be parsed,
     // thus this is not a constructor but a test-helper
     fn compound_with_prototype_and_overrides<'s>(
-        prototype: &'s str,
+        prototype: Vec<&'s str>,
         overrides: Vec<(&'s str, Object<'s>)>
     ) -> Object<'s> {
         Object::Compound(Compound {
-            prototype: Reference { identifiers: vec![ Identifier { name: prototype } ] },
+            prototype: Reference {
+                identifiers: prototype.iter()
+                    .map(|id| Identifier { name: id }).collect()
+            },
             overrides: NamedObjects {
                 identifiers: overrides.iter().enumerate()
                     .map(|(index, &(ref name, _))| {
@@ -336,12 +339,12 @@ mod test_parsing {
         })
     }
 
-    fn compound_with_prototype(prototype: &str) -> Object {
+    fn compound_with_prototype(prototype: Vec<&str>) -> Object {
         compound_with_prototype_and_overrides(prototype, vec![])
     }
 
     fn empty_compound() -> Object<'static> {
-        compound_with_prototype("")
+        compound_with_prototype(vec![])
     }
 
 
@@ -440,9 +443,8 @@ mod test_parsing {
         assert_eq!(parse_identifier("xy "), (Identifier { name: "xy" }, " "));
         assert_eq!(parse_identifier(" xy "), (Identifier { name: "xy" }, " "));
         assert_eq!(parse_identifier(" xy9 "), (Identifier { name: "xy9" }, " "));
-
         assert_eq!(parse_identifier(" 9 "), (Identifier { name: "9" }, " "));
-        assert_eq!(parse_identifier("x§"), (Identifier { name: "x" }, "§"));
+        assert_eq!(parse_identifier("x§"), (Identifier { name: "x§" }, ""));
     }
 
     #[test]
@@ -479,10 +481,10 @@ mod test_parsing {
     fn test_parse_flat_value(){
         assert_eq!(parse_object("'xyz'"), Ok((Object::StringLiteral("xyz"), "")));
         assert_eq!(parse_object(" 'xyz' "), Ok((Object::StringLiteral("xyz"), " ")));
-        assert_eq!(parse_object("div"), Ok((compound_with_prototype("div"), "")));
-        assert_eq!(parse_object(" div!"), Ok((compound_with_prototype("div"), "!")));
-        assert_eq!(parse_object("div{}"), Ok((compound_with_prototype("div"), "")));
-        assert_eq!(parse_object(" div { } "), Ok((compound_with_prototype("div"), " ")));
+        assert_eq!(parse_object("div"), Ok((compound_with_prototype(vec!["div"]), "")));
+        assert_eq!(parse_object(" div!"), Ok((compound_with_prototype(vec!["div!"]), "")));
+        assert_eq!(parse_object("div{}"), Ok((compound_with_prototype(vec!["div"]), "")));
+        assert_eq!(parse_object(" div { } "), Ok((compound_with_prototype(vec!["div"]), " ")));
         assert_eq!(parse_object(""), Ok((empty_compound(), "")));
 
 
@@ -507,7 +509,7 @@ mod test_parsing {
             parse_named_object(" text: div { } "),
             Ok((
                 Identifier { name: "text" },
-                compound_with_prototype("div"),
+                compound_with_prototype(vec!["div"]),
                 " "
             ))
         );
@@ -519,7 +521,7 @@ mod test_parsing {
             parse_named_object(" my_div: div { text: 'xy z' } "),
             Ok((
                 Identifier { name: "my_div", },
-                compound_with_prototype_and_overrides("div", vec![
+                compound_with_prototype_and_overrides(vec!["div"], vec![
                     ("text", Object::StringLiteral("xy z")),
                 ]),
                 " "
@@ -530,9 +532,9 @@ mod test_parsing {
             parse_named_object(" my_div: div { text: 'xy z' content: default {} } "),
             Ok((
                 Identifier { name: "my_div" },
-                compound_with_prototype_and_overrides("div", vec![
+                compound_with_prototype_and_overrides(vec!["div"], vec![
                     ("text", Object::StringLiteral("xy z")),
-                    ("content", compound_with_prototype("default")),
+                    ("content", compound_with_prototype(vec!["default"])),
                 ]),
                 " "
             ))
