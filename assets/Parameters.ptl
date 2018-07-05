@@ -1,0 +1,8 @@
+
+Button: Rectangle {
+    fill: 'black' // property of Rectangle 
+    $text: 'Press' // parameter of Button 
+    content: Label { 
+        text: $text // usage of parameter 
+    }
+}
