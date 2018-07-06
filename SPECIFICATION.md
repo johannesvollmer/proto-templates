@@ -11,8 +11,11 @@ Structured however can be used like Json objects and arrays at the same time.
 
 A regular grammar describing the syntax could look like this:
 `document -> (object)*`
+
 `object -> string | compound`
+
 `compound -> (name): (prototype) ({  (object)*  })  `
+
 `prototype -> top_level_identifier (.member_identifier)*`
 
 
