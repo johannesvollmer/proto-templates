@@ -106,3 +106,4 @@ a custom mixture based on regular expressions and regular grammars:__
     like appending to the prototypes collection. 
     Maybe ternary operators and comparison checks.
 -   Parameters for more complex prototypes
+-   Consider always having names in quotes, to enable more complex names.
