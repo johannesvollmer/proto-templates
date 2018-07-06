@@ -4,6 +4,8 @@
 - [x] More Examples in the Specification
 
 ## Implementation
+- [ ] Change implementation to quotes 
+      instead of apostrophes for string literals!
 - [x] Implement FlatObjects 
 - [ ] Implement ReferenceObjects 
 - [ ] Streaming and Zero-Copy parsing variants
