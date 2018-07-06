@@ -2,6 +2,20 @@
 
 ## Specification
 
+
+
+All information in this language is represented in string literals,
+which can be structured using composition. Unlike Json,
+it does not support various primitive types like numbers or booleans. 
+Structured however can be used like Json objects and arrays at the same time. 
+
+A regular grammar describing the syntax could look like this:
+`document -> (object)*`
+`object -> string | compound`
+`compound -> (name): (prototype) ({  (object)*  })  `
+`prototype -> top_level_identifier (.member_identifier)*`
+
+
 The largest unit in this language is an object. 
 Objects are a name, followed by a semicolon, 
 followed by either string literals, 
