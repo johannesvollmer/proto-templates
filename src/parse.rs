@@ -48,11 +48,11 @@ pub enum ParseError<'s> {
     UnexpectedEndOfInput { expected: Option<char> },
 }
 
-pub type ResolveResult<'s, T> = ::std::result::Result<T, ResolveError<'s>>;
+pub type ResolveResult<T> = ::std::result::Result<T, ResolveError>;
 
 #[derive(Eq, PartialEq, Debug, Hash, Clone)]
-pub enum ResolveError<'s> {
-    ReferenceNotFound(Identifier<'s>),
+pub enum ResolveError {
+    ReferenceNotFound { identifier: String }, // resolve-error cannot borrow because it should be able to outlive the source code
     StringLiteralHasNoProperties,
 }
 
@@ -75,7 +75,7 @@ impl<'s> NamedObjects<'s> {
             .expect("resolve_reference_names: identifiers must not be empty");
 
         let index = self.identifiers.get(first)
-            .ok_or_else(|| ResolveError::ReferenceNotFound(first.clone()))?;
+            .ok_or_else(|| ResolveError::ReferenceNotFound { identifier: first.name.to_string() })?;
 
         let identified = self.objects.get(*index)
             .expect("Invalid NamedObject::names Index");
