@@ -97,19 +97,24 @@ impl<'s> NamedObjects<'s> {
 
 /// returns Some(remaining_source) if the next character is the specified symbol
 fn skip_char(source: Source, symbol: char) -> Option<Source> {
-    if source.starts_with(symbol) {
-        Some(&source[symbol.len_utf8() .. ])
-
-    } else {
-        None
-    }
+    expect_char(source, symbol).ok()
 }
 
 /// returns Ok(remaining_source) if the first character is the specified symbol
-fn expect_char(source: Source, expected_symbol: char) -> ParseResult<Source> {
-    skip_char(source, expected_symbol).ok_or(ParseError::UnexpectedSymbol {
-        found: source, expected: Some(expected_symbol),
-    })
+fn expect_char(source: Source, symbol: char) -> ParseResult<Source> {
+    if source.starts_with(symbol) {
+        Ok(&source[symbol.len_utf8() .. ])
+
+    } else {
+        if source.is_empty() {
+            Err(ParseError::UnexpectedEndOfInput { expected: Some(symbol) })
+        } else {
+            Err(ParseError::UnexpectedSymbol {
+                expected: Some(symbol),
+                found: source,
+            })
+        }
+    }
 }
 
 fn parse_chars_while<F: Fn(char) -> bool>(source: Source, predicate: F) -> (&str, Source) {
@@ -187,13 +192,7 @@ fn parse_reference(source: Source) -> (Reference, Source) {
             let (identifier, new_source) = parse_identifier(new_source);
             if !identifier.name.is_empty() {
                 identifiers.push(identifier);
-            } /* else {
-                TODO
-                return Err(ParseError::UnexpectedSymbol {
-                    expected: None, // TODO expected("")
-                    found: source,
-                })
-            }*/
+            }
 
             remaining = new_source;
         }
@@ -202,7 +201,6 @@ fn parse_reference(source: Source) -> (Reference, Source) {
     }
 
     (Reference { identifiers }, source)
-
 }
 
 /// skips leading whitespace, parses until a '}' is found, throws error on file end without '}'
@@ -294,9 +292,7 @@ fn parse_object(source: Source) -> ParseResult<(Object, Source)> {
 fn parse_named_object(source: Source) -> ParseResult<(Identifier, Object, Source)> {
     let (name, source) = parse_identifier(source);
     let source = expect(source, ':')?;
-
     let (object, source) = parse_object(source)?;
-
     Ok((name, object, source))
 }
 
@@ -323,7 +319,8 @@ mod test_parsing {
         Object::Compound(Compound {
             prototype: Reference {
                 identifiers: prototype.iter()
-                    .map(|id| Identifier { name: id }).collect()
+                    .map(|name| Identifier { name })
+                    .collect()
             },
             overrides: NamedObjects {
                 identifiers: overrides.iter().enumerate()
@@ -381,8 +378,8 @@ mod test_parsing {
         assert_eq!(expect(" {}", '{'), Ok("}"));
         assert_eq!(expect(" \n\t {}", '{'), Ok("}"));
 
-        // TODO assert_eq!(expect_symbol("", '{'), Err(ParseError::UnexpectedEndOfInput { expected: Some('{') }));
-        // TODO assert_eq!(expect_symbol(" \n", 'x'), Err(ParseError::UnexpectedEndOfInput { expected: Some('x') }));
+        assert_eq!(expect("", '{'), Err(ParseError::UnexpectedEndOfInput { expected: Some('{') }));
+        assert_eq!(expect(" \n", 'x'), Err(ParseError::UnexpectedEndOfInput { expected: Some('x') }));
 
         assert_eq!(expect("x", 'x'), Ok(""));
         assert_eq!(expect(" \nx", 'x'), Ok(""));
