@@ -1,9 +1,7 @@
 # PROTO-TEMPLATES: TODO
 
 ## Specification
-- [ ] More Examples and Grammars
-- [ ] Template Parameters
-- [ ] Collection / String / Algebraic Operations
+- [x] More Examples in the Specification
 
 ## Implementation
 - [x] Implement FlatObjects 
