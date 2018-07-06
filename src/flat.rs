@@ -11,18 +11,15 @@ pub enum FlatObject {
 
 
 impl FlatObject {
-    pub fn parse(source: ::parse::Source) -> ::parse::ParseResult<FlatObject> {
-        ::parse::parse(source).map(|parsed| Self::build_from_parsed(&parsed))
+    pub fn parse(source: ::parse::Source) -> ::parse::ParseResult<ResolveResult<FlatObject>> {
+        ::parse::parse(source).map(|parsed| {
+            Self::build_from_parsed(&parsed)
+        })
     }
 
-    pub fn build_from_parsed(parsed: &NamedObjects) -> FlatObject {
-        FlatObject::Compound(Self::build_from_parsed_named_objects(parsed, parsed))
-    }
-
-    fn build_from_parsed_named_objects(objects: &NamedObjects, world: &NamedObjects) -> FlatCompound {
-        let mut properties = HashMap::new();
-        Self::fill_named_objects(objects, world, &mut properties);
-        properties
+    pub fn build_from_parsed(parsed: &NamedObjects) -> ResolveResult<FlatObject> {
+        Self::build_from_parsed_named_objects(parsed, parsed)
+            .map(|objects| FlatObject::Compound(objects))
     }
 
 
@@ -31,37 +28,56 @@ impl FlatObject {
         objects: &NamedObjects,
         world: &NamedObjects,
         properties: &mut FlatCompound
-    ){
+    ) -> ResolveResult<()> {
         for (override_identifier, override_index) in &objects.identifiers {
             let name_string = override_identifier.name.to_owned();
-            properties.entry(name_string).or_insert_with(||{
-                FlatObject::build_from_parsed_unnamed_object(
-                    &objects.objects[*override_index],
-                    world
-                )
-            });
+            if !properties.contains_key(&name_string) {
+                properties.insert(
+                    name_string,
+                    FlatObject::build_from_parsed_unnamed_object(
+                        &objects.objects[*override_index],
+                        world
+                    )?
+                );
+            }
         }
+
+        Ok(())
     }
+
+
+    fn build_from_parsed_named_objects(
+        objects: &NamedObjects,
+        world: &NamedObjects
+    ) -> ResolveResult<FlatCompound> {
+        let mut properties = HashMap::new();
+        Self::fill_named_objects(objects, world, &mut properties)?;
+        Ok(properties)
+    }
+
 
     fn deep_fill_parsed_compound(
         compound: &Compound,
         world: &NamedObjects,
         properties: &mut FlatCompound
-    ) {
-        Self::fill_named_objects(&compound.overrides, world, properties);
+    ) -> ResolveResult<()> {
+        Self::fill_named_objects(&compound.overrides, world, properties)?;
 
         if compound.prototype.has_target() {
             // insert all inherited properties, if not already overridden
-            if let Object::Compound(ref compound) = *world.resolve_reference(&compound.prototype)
-                .expect(&format!("variable not found: '{:?}'", compound.prototype)) // TODO use runtime error handling
-                {
-                    Self::deep_fill_parsed_compound(compound, world, properties);
-                }
+            if let Object::Compound(ref compound) = *world.resolve_reference(&compound.prototype)? {
+                Self::deep_fill_parsed_compound(compound, world, properties)?;
+            }
         }
+
+        Ok(())
     }
 
-    fn build_from_parsed_unnamed_object(parsed: &Object, world: &NamedObjects) -> FlatObject {
-        match *parsed {
+    fn build_from_parsed_unnamed_object(
+        parsed: &Object,
+        world: &NamedObjects
+    ) -> ResolveResult<FlatObject> {
+        Ok(match *parsed {
             Object::StringLiteral(ref literal) => {
                 FlatObject::StringLiteral(literal.to_string())
             },
@@ -70,21 +86,18 @@ impl FlatObject {
                 // inlining of variables,
                 // needed for the special case where the prototype is a string literal
                 if compound.overrides.objects.is_empty() && compound.prototype.has_target() {
-                    let prototype = world.resolve_reference(&compound.prototype)
-                        // TODO use runtime error handling
-                        .expect(&format!("variable not found: '{:?}'", compound.prototype));
-
-                    Self::build_from_parsed_unnamed_object(prototype, world)
+                    let prototype = world.resolve_reference(&compound.prototype)?;
+                    Self::build_from_parsed_unnamed_object(prototype, world)?
 
                 } else { // plain object with some overrides, or empty
                     FlatObject::Compound({
                         let mut properties = HashMap::new();
-                        Self::deep_fill_parsed_compound(compound, world, &mut properties);
+                        Self::deep_fill_parsed_compound(compound, world, &mut properties)?;
                         properties
                     })
                 }
             }
-        }
+        })
     }
 }
 
@@ -108,7 +121,7 @@ mod test {
     #[test]
     fn test_build_flat_object(){
         assert_eq!(
-            FlatObject::parse(" color: ' #abc ' ").expect("Parsing Error"),
+            FlatObject::parse(" color: ' #abc ' ").expect("Parsing Error").expect("Resolve Error"),
             compound(vec![
                 ("color", literal(" #abc "))
             ])
@@ -120,7 +133,7 @@ mod test {
                 default_color: { r:'0' g:'0' b:'0' }
                 red: default_color { r:'1' }
 
-            "#).expect("Parsing Error"),
+            "#).expect("Parsing Error").expect("Resolve Error"),
 
             compound(vec![
                 ("default_color", compound(vec![
@@ -148,7 +161,7 @@ mod test {
 
                 ok_button: Button { text: ok_text }
 
-            "#).expect("Parsing Error"),
+            "#).expect("Parsing Error").expect("Resolve Error"),
 
             compound(vec![
                 ("ok_text", literal("Ok")),
@@ -178,19 +191,34 @@ mod test {
                     text: text.cancel.german
                 }
 
-            "#).expect("Parsing Error"),
+            "#).expect("Parsing Error").expect("Resolve Error"),
 
             compound(vec![
-                (("text"), compound(vec![
-                    (("cancel"), compound(vec![
-                        (("german"), literal("Abbrechen")),
+                ("text", compound(vec![
+                    ("cancel", compound(vec![
+                        ("german", literal("Abbrechen")),
                     ])),
                 ])),
 
-                (("cancel_button"), compound(vec![
-                    (("text"), literal("Abbrechen")),
+                ("cancel_button", compound(vec![
+                    ("text", literal("Abbrechen")),
                 ])),
             ])
         );
+
+
+
+        assert_eq!(
+            FlatObject::parse(r#"
+                text: 'herbert'
+                text2: text1
+            "#).expect("Parsing Error"),
+
+            Err(ResolveError::ReferenceNotFound {
+                identifier: String::from("text1"),
+            })
+        );
+
+        // TODO test resolve-errors and parse-errors
     }
 }
