@@ -52,7 +52,7 @@ comics: {
     }
     
     superman: Comic {
-        title: "The Amazing Spiderman" // override the title
+        title: "Superman Returns" // override the title
         protagonist: persons.clark // add a new property
         // inherits published: "true" and author-values
     }
