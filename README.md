@@ -4,7 +4,7 @@ Proto-Templates aims to be a visually minimalist but feature-rich markup languag
 It could be used in places where HTML, JSON, or similar languages are used.
 In contrast to HTML, Proto-Templates aims to 
 reduce visual complexity and duplication of information.
-To reduce redundancy, prototypal inheritance and variables are introduced.
+To reduce redundancy, the idea of prototypal inheritance and variables is explored.
 
 This repository holds the Specification of Proto-Templates, 
 and also implements it using Rust.
